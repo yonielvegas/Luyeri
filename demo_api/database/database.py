@@ -2,7 +2,10 @@ import os
 from sqlalchemy import create_engine, MetaData, Table
 
 # Configuración de la conexión a la base de datos
-DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://conversiones_user:muses_c_us_27809@127.0.0.1:3306/prueba_api_conversiones")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "mysql+pymysql://yonielvegas:veronica@127.0.0.1:3308/luyeri"
+)
 
 # Crear el motor de la base de datos
 engine = create_engine(DATABASE_URL, echo=True)  # Cambiar a False en producción
@@ -10,4 +13,7 @@ engine = create_engine(DATABASE_URL, echo=True)  # Cambiar a False en producció
 # Metadata y tablas
 metadata = MetaData()
 
-ct = Table('conversion_temperatura', metadata, autoload_with=engine)
+# Cargar las tablas
+usuarios = Table('usuarios', metadata, autoload_with=engine)
+usuario_intentos = Table('usuario_intentos', metadata, autoload_with=engine)
+registro_de_puntos = Table('registro_de_puntos', metadata, autoload_with=engine)

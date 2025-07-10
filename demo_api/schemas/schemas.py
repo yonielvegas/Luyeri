@@ -6,8 +6,9 @@ from datetime import date
 # Tabla: usuarios
 # ========================
 class UsuarioBaseSchema(BaseModel):
-    id: int
+    id_usuario: int
     nombre_completo: str
+    correo: str
     username: str
     contraseña: str
     fecha_registro: date
@@ -31,13 +32,24 @@ class UsuarioIntentoSchema(BaseModel):
 
 
 # ========================
-# Tabla: registro_de_puntos
+# Tabla: tipos_introvertido
 # ========================
-class RegistroPuntosSchema(BaseModel):
+class TiposIntrovertidoSchema(BaseModel):
+    id_tipointro: int
+    tipo: str
+    video: str
+
+    class Config:
+        orm_mode = True
+
+
+# ========================
+# Tabla: usuario_tipo
+# ========================
+class UsuarioTipoSchema(BaseModel):
     id: int
-    cantidad_puntos: int
-    usuario_id: int
-    fecha_registro: date
+    id_usuario: int
+    id_tipointro: int
 
     class Config:
         orm_mode = True

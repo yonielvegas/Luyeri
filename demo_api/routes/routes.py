@@ -1,15 +1,16 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, update, insert
+from sqlalchemy import select, update, insert, or_
 from sqlalchemy.engine import Result
-from database.database import engine, usuarios, usuario_intentos, registro_de_puntos
+from database.database import engine, usuarios, usuario_intentos, usuario_tipo, tipos_introvertido
 from datetime import datetime
+
 
 
 login_router = APIRouter()
 
 class LoginRequest(BaseModel):
-    user_or_username: str
+    user_or_email: str
     password: str
 
 class UpdatePuntosRequest(BaseModel):
@@ -19,7 +20,7 @@ class UpdatePuntosRequest(BaseModel):
 
 @login_router.post("/api/login")
 def login(request: LoginRequest):
-    user_or_username = request.user_or_username
+    user_or_username = request.user_or_email
     password = request.password
 
     try:
@@ -28,7 +29,10 @@ def login(request: LoginRequest):
             try:
                 # Buscar usuario
                 query = select(usuarios).where(
-                    usuarios.c.username == user_or_username
+                    or_(
+                        usuarios.c.username == user_or_username,
+                        usuarios.c.correo == user_or_username
+                    )
                 )
                 result: Result = connection.execute(query)
                 user = result.fetchone()
@@ -40,7 +44,7 @@ def login(request: LoginRequest):
 
                 # Verificar si tiene registro de intentos
                 intentos_query = select(usuario_intentos).where(
-                    usuario_intentos.c.usuario_id == user_dict['id']
+                    usuario_intentos.c.id_usuario == user_dict['id_usuario']
                 )
                 intentos_result = connection.execute(intentos_query).fetchone()
 
@@ -48,7 +52,7 @@ def login(request: LoginRequest):
                 if not intentos_result:
                     connection.execute(
                         insert(usuario_intentos).values(
-                            usuario_id=user_dict['id'],
+                            id_usuario=user_dict['id_usuario'],
                             intentos=0,
                             estado=1
                         )
@@ -69,36 +73,48 @@ def login(request: LoginRequest):
                     nuevo_estado = 0 if nuevos_intentos >= 3 else 1
 
                     stmt = update(usuario_intentos).where(
-                        usuario_intentos.c.usuario_id == user_dict['id']
+                        usuario_intentos.c.id_usuario == user_dict['id_usuario']
                     ).values(intentos=nuevos_intentos, estado=nuevo_estado)
 
                     connection.execute(stmt)
                     trans.commit()
-
-                    print(f"[LOGIN FALLIDO] Usuario ID {user_dict['id']} | Intentos: {nuevos_intentos} | Estado: {nuevo_estado}")
                     raise HTTPException(status_code=401, detail="Usuario o Contraseña Incorrecto")
 
                 # Si login exitoso, reiniciar intentos
                 connection.execute(
                     update(usuario_intentos).where(
-                        usuario_intentos.c.usuario_id == user_dict['id']
+                        usuario_intentos.c.id_usuario == user_dict['id_usuario']
                     ).values(intentos=0, estado=1)
                 )
 
-                # Obtener puntos
-                puntos_query = select(registro_de_puntos.c.cantidad_puntos).where(
-                    registro_de_puntos.c.usuario_id == user_dict['id']
-                )
-                puntos_result = connection.execute(puntos_query).fetchone()
-                puntos = puntos_result[0] if puntos_result else 0
+                #Obtener Informacion del usuario Introvertido
+                query =(select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
+                .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
+                .where(usuario_tipo.c.id_usuario == user_dict['id_usuario'])) 
+
+                result: Result = connection.execute(query)
+                intro_list = [dict(row._mapping) for row in result.fetchall()]
+
+                if intro_list:
+                    user_dict['id_tipointro'] = ",".join(str(i['id_tipointro']) for i in intro_list)
+                    user_dict['tipo_introvertido'] = ",".join(i['tipo'] for i in intro_list)
+                    user_dict['video_introvertido'] = ",".join(i['video'] for i in intro_list)
+                else:
+                    user_dict['id_tipointro'] = None
+                    user_dict['tipo_introvertido'] = None
+                    user_dict['video_introvertido'] = None
+
+
 
                 trans.commit()
 
                 return {
                     "message": "Inicio de sesión exitoso",
-                    "user_id": user_dict['id'],
+                    "user_id": user_dict['id_usuario'],
                     "nombre_completo": user_dict['nombre_completo'],
-                    "puntos": puntos
+                    "id_tipo_introvertido": user_dict['id_tipointro'],
+                    "tipos_de_introvertido": user_dict['tipo_introvertido'],
+                    "video": user_dict['video_introvertido']
                 }
 
             except:
@@ -110,39 +126,3 @@ def login(request: LoginRequest):
     except Exception as e:
         print(f"[ERROR] {e}")
         raise HTTPException(status_code=500, detail="Error interno del servidor")
-
-
-@login_router.put("/api/puntos")
-def actualizar_puntos(request: UpdatePuntosRequest):
-    try:
-        now = datetime.now()
-        with engine.begin() as connection:
-            # Verificar si ya existe un registro de puntos para el usuario
-            query = select(registro_de_puntos).where(
-                registro_de_puntos.c.usuario_id == request.user_id
-            )
-            result = connection.execute(query).fetchone()
-
-            if result:
-                # Actualizar puntos y fecha
-                stmt = update(registro_de_puntos).where(
-                    registro_de_puntos.c.usuario_id == request.user_id
-                ).values(
-                    cantidad_puntos=request.puntos,
-                    fecha_registro=now
-                )
-                print(f"Actualizando puntos para usuario {request.user_id}")
-            else:
-                # Insertar nuevo registro
-                stmt = insert(registro_de_puntos).values(
-                    usuario_id=request.user_id,
-                    cantidad_puntos=request.puntos,
-                    fecha_registro=now
-                )
-                print(f"Insertando puntos para usuario {request.user_id}")
-
-            connection.execute(stmt)
-            return {"message": "Puntos actualizados correctamente"}
-    except Exception as e:
-        print(f"Error actualizando puntos: {e}")
-        raise HTTPException(status_code=500, detail="Error al actualizar puntos")

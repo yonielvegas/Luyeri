@@ -16,4 +16,5 @@ metadata = MetaData()
 # Cargar las tablas
 usuarios = Table('usuarios', metadata, autoload_with=engine)
 usuario_intentos = Table('usuario_intentos', metadata, autoload_with=engine)
-registro_de_puntos = Table('registro_de_puntos', metadata, autoload_with=engine)
+tipos_introvertido = Table('tipos_introvertido', metadata, autoload_with=engine)
+usuario_tipo = Table('usuario_tipo', metadata, autoload_with=engine)

@@ -1,24 +1,28 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, constr
 from sqlalchemy import select, update, insert, or_
 from sqlalchemy.engine import Result
 from database.database import engine, usuarios, usuario_intentos, usuario_tipo, tipos_introvertido
 from datetime import datetime
+from typing import List
 
 
 
-login_router = APIRouter()
+router = APIRouter()
 
 class LoginRequest(BaseModel):
     user_or_email: str
     password: str
 
-class UpdatePuntosRequest(BaseModel):
-    user_id: int
-    puntos: int
+class RegisterRequest(BaseModel):
+    nombre_completo: constr(strip_whitespace=True, min_length=1)
+    correo: EmailStr
+    user: constr(strip_whitespace=True, min_length=3, max_length=30)
+    password: constr(min_length=6)
+    tipo_introvert: List[int]
 
 
-@login_router.post("/api/login")
+@router.post("/api/login")
 def login(request: LoginRequest):
     user_or_username = request.user_or_email
     password = request.password
@@ -120,6 +124,67 @@ def login(request: LoginRequest):
             except:
                 trans.rollback()
                 raise
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+#Registro
+
+@router.post("/api/registrar")
+def registrar(request: RegisterRequest):
+    nombre = request.nombre_completo
+    email = request.correo
+    user = request.user
+    password = request.password
+    tipintro = request.tipo_introvert
+
+    try:
+        with engine.connect() as connection:
+            # Transacción segura
+            with connection.begin():
+
+                # Verificar si ya existe el usuario o correo
+                check_query = select(usuarios).where(
+                    (usuarios.c.username == user) | (usuarios.c.correo == email)
+                )
+                result: Result = connection.execute(check_query)
+                existing_user = result.fetchone()
+
+                if existing_user:
+                    raise HTTPException(
+                        status_code=409, detail="Usuario o correo ya registrado"
+                    )
+
+                # Insertar usuario y obtener el ID insertado
+                insert_query = (
+                    insert(usuarios)
+                    .values(
+                        nombre_completo=nombre,
+                        correo=email,
+                        username=user,
+                        contraseña=password
+                    )
+                    .returning(usuarios.c.id_usuario)
+                )
+                result: Result = connection.execute(insert_query)
+                inserted_id = result.scalar_one()
+
+                # Insertar los tipos de introvertido asociados
+                for tipo_id in tipintro:
+                    connection.execute(
+                        insert(usuario_tipo).values(
+                            id_usuario=inserted_id,
+                            id_tipointro=tipo_id
+                        )
+                    )
+
+                return {
+                    "message": "Usuario registrado exitosamente",
+                    "user_id": inserted_id
+                }
 
     except HTTPException as he:
         raise he

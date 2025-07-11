@@ -1,10 +1,10 @@
 from fastapi import FastAPI
-from routes.routes import login_router
+from routes.routes import router
 
 app = FastAPI()
 
 # Incluir el router de temperatura_router con la etiqueta 'Conversiones de Temperaturas'
-app.include_router(login_router)
+app.include_router(router)
 
 
 if __name__ == "__main__":

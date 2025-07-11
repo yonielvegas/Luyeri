@@ -3,9 +3,19 @@ from pydantic import BaseModel, EmailStr, constr
 from sqlalchemy import select, update, insert, or_
 from sqlalchemy.engine import Result
 from database.database import engine, usuarios, usuario_intentos, usuario_tipo, tipos_introvertido
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
+from jose import jwt
 
+
+SECRET_KEY = "brochazo"
+ALGORITHM = "HS256"
+
+def crear_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(days=7))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
 router = APIRouter()
@@ -108,12 +118,14 @@ def login(request: LoginRequest):
                     user_dict['tipo_introvertido'] = None
                     user_dict['video_introvertido'] = None
 
-
+                token = crear_token({"sub": str(user_dict['id_usuario'])})
 
                 trans.commit()
 
                 return {
                     "message": "Inicio de sesión exitoso",
+                    "token": token,
+                    "tipo_token": "bearer",
                     "user_id": user_dict['id_usuario'],
                     "nombre_completo": user_dict['nombre_completo'],
                     "id_tipo_introvertido": user_dict['id_tipointro'],
@@ -167,23 +179,50 @@ def registrar(request: RegisterRequest):
                         username=user,
                         contraseña=password
                     )
-                    .returning(usuarios.c.id_usuario)
+                    .returning(usuarios)
                 )
                 result: Result = connection.execute(insert_query)
-                inserted_id = result.scalar_one()
+                user = result.fetchone()
+
+                user_dict = dict(user._mapping)
 
                 # Insertar los tipos de introvertido asociados
                 for tipo_id in tipintro:
                     connection.execute(
                         insert(usuario_tipo).values(
-                            id_usuario=inserted_id,
+                            id_usuario=user_dict['id_usuario'],
                             id_tipointro=tipo_id
                         )
                     )
 
+                #Obtener Informacion del usuario Introvertido
+                query =(select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
+                .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
+                .where(usuario_tipo.c.id_usuario == user_dict['id_usuario'])) 
+
+                result: Result = connection.execute(query)
+                intro_list = [dict(row._mapping) for row in result.fetchall()]
+
+                if intro_list:
+                    user_dict['id_tipointro'] = ",".join(str(i['id_tipointro']) for i in intro_list)
+                    user_dict['tipo_introvertido'] = ",".join(i['tipo'] for i in intro_list)
+                    user_dict['video_introvertido'] = ",".join(i['video'] for i in intro_list)
+                else:
+                    user_dict['id_tipointro'] = None
+                    user_dict['tipo_introvertido'] = None
+                    user_dict['video_introvertido'] = None
+
+                token = crear_token({"sub": str(user_dict['id_usuario'])})
+
                 return {
                     "message": "Usuario registrado exitosamente",
-                    "user_id": inserted_id
+                    "token": token,
+                    "tipo_token": "bearer",
+                    "user_id": user_dict['id_usuario'],
+                    "nombre_completo": user_dict['nombre_completo'],
+                    "id_tipo_introvertido": user_dict['id_tipointro'],
+                    "tipos_de_introvertido": user_dict['tipo_introvertido'],
+                    "video": user_dict['video_introvertido']
                 }
 
     except HTTPException as he:

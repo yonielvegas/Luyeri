@@ -6,6 +6,8 @@ from database.database import engine, usuarios, usuario_intentos, usuario_tipo, 
 from datetime import datetime, timedelta
 from typing import List
 from jose import jwt
+from google.oauth2 import id_token
+from google.auth.transport import requests 
 
 import bcrypt
 
@@ -41,12 +43,13 @@ class RegisterRequest(BaseModel):
     password: constr(min_length=6)
     tipo_introvert: List[int]
 
-class GoogleLoginRequest(BaseModel):
+class GoogleToken(BaseModel):
     id_token: str
 
-class GoogleRegisterRequest(BaseModel):
+class GoogleRegister(BaseModel):
     id_token: str
-    tipo_introvert: list[int]
+    tipo_introvert: List[int]
+
 
 
 @router.post("/api/login")
@@ -247,48 +250,37 @@ def registrar(request: RegisterRequest):
         print(f"[ERROR] {e}")
         raise HTTPException(status_code=500, detail="Error interno del servidor")
 
-#LOGIN CON GOOGLE
-@router.post("/api/login_google")
-async def login_google(request: GoogleLoginRequest):
-    try:
-        # Verifica token de Google
-        idinfo = id_token.verify_oauth2_token(request.id_token, grequests.Request(), "497568617858-aq83mv77sm0m4jme2k5vvjmcfrap6iub.apps.googleusercontent.com")
 
-        google_user_id = idinfo['sub']
-        email = idinfo.get('email')
-        nombre = idinfo.get('name', 'Usuario Google')
+# --- INICIO DE SESIÓN CON GOOGLE ---
+@router.post("/api/login_google")
+def login_google(request: GoogleToken):
+    try:
+        # Verificar token
+        idinfo = id_token.verify_oauth2_token(
+            request.id_token,
+            grequests.Request()
+        )
+
+        email = idinfo.get("email")
+        nombre = idinfo.get("name")
 
         with engine.connect() as connection:
-            # Verificar si el usuario ya existe
-            query = select(usuarios).where(usuarios.c.correo == email)
-            result = connection.execute(query)
-            user = result.fetchone()
+            # Buscar usuario por correo
+            result = connection.execute(
+                select(usuarios).where(usuarios.c.correo == email)
+            ).fetchone()
 
-            if not user:
-                # Crear nuevo usuario con datos mínimos
-                ins = insert(usuarios).values(
-                    nombre_completo=nombre,
-                    correo=email,
-                    username=email.split("@")[0],
-                    contraseña="",  # vacía porque es login Google
-                )
-                res = connection.execute(ins)
-                connection.commit()
+            if not result:
+                raise HTTPException(status_code=404, detail="Usuario no registrado")
 
-                # Recuperar usuario creado
-                result = connection.execute(select(usuarios).where(usuarios.c.correo == email))
-                user = result.fetchone()
+            user_dict = dict(result._mapping)
 
-            user_dict = dict(user._mapping)
+            # Obtener tipos de introversión
+            query = (select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
+                     .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
+                     .where(usuario_tipo.c.id_usuario == user_dict['id_usuario']))
 
-            # Opcional: obtener info introvertido si existe
-            query_intro = (
-                select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
-                .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
-                .where(usuario_tipo.c.id_usuario == user_dict['id_usuario'])
-            )
-            result_intro = connection.execute(query_intro)
-            intro_list = [dict(row._mapping) for row in result_intro.fetchall()]
+            intro_list = [dict(row._mapping) for row in connection.execute(query).fetchall()]
 
             if intro_list:
                 user_dict['id_tipointro'] = ",".join(str(i['id_tipointro']) for i in intro_list)
@@ -314,94 +306,79 @@ async def login_google(request: GoogleLoginRequest):
 
     except ValueError:
         raise HTTPException(status_code=401, detail="Token de Google inválido")
-    except Exception as e:
-        print(f"[ERROR Google Login] {e}")
-        raise HTTPException(status_code=500, detail="Error interno del servidor")
-    
 
+
+# --- REGISTRO CON GOOGLE ---
 @router.post("/api/registrar_google")
-async def registrar_google(request: GoogleRegisterRequest):
+def registrar_google(request: GoogleRegister):
     try:
-        # Validar id_token con Google
         idinfo = id_token.verify_oauth2_token(
             request.id_token,
-            grequests.Request(),
-            "497568617858-aq83mv77sm0m4jme2k5vvjmcfrap6iub.apps.googleusercontent.com"
+            grequests.Request()
         )
 
-        email = idinfo.get('email')
-        nombre = idinfo.get('name', 'Usuario Google')
-
-        if not email:
-            raise HTTPException(status_code=400, detail="Correo no proporcionado por Google")
+        email = idinfo.get("email")
+        nombre = idinfo.get("name")
 
         with engine.connect() as connection:
-            # Verificar si usuario ya existe
-            query = select(usuarios).where(usuarios.c.correo == email)
-            result = connection.execute(query)
-            user = result.fetchone()
+            with connection.begin():
 
-            if user:
-                raise HTTPException(status_code=409, detail="Usuario ya registrado con este correo")
+                result = connection.execute(
+                    select(usuarios).where(usuarios.c.correo == email)
+                ).fetchone()
 
-            # Insertar nuevo usuario
-            ins = insert(usuarios).values(
-                nombre_completo=nombre,
-                correo=email,
-                username=email.split("@")[0],
-                contraseña=""  # sin contraseña para login Google
-            )
-            connection.execute(ins)
-            connection.commit()
+                if result:
+                    raise HTTPException(status_code=409, detail="Usuario ya registrado")
 
-            # Obtener usuario creado
-            result = connection.execute(select(usuarios).where(usuarios.c.correo == email))
-            user = result.fetchone()
-            user_dict = dict(user._mapping)
-
-            # Insertar tipos introvertidos elegidos
-            for tipo_id in request.tipo_introvert:
-                connection.execute(
-                    insert(usuario_tipo).values(
-                        id_usuario=user_dict['id_usuario'],
-                        id_tipointro=tipo_id
+                insert_query = (
+                    insert(usuarios)
+                    .values(
+                        nombre_completo=nombre,
+                        correo=email,
+                        username=email.split('@')[0],  # Puedes personalizar esto
+                        contraseña=hashear_contraseña("google_default")  # Puedes dejar esto como dummy
                     )
+                    .returning(usuarios)
                 )
-            connection.commit()
+                user = connection.execute(insert_query).fetchone()
+                user_dict = dict(user._mapping)
 
-            # Obtener tipos introvertidos para respuesta
-            query_intro = (
-                select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
-                .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
-                .where(usuario_tipo.c.id_usuario == user_dict['id_usuario'])
-            )
-            result_intro = connection.execute(query_intro)
-            intro_list = [dict(row._mapping) for row in result_intro.fetchall()]
+                for tipo_id in request.tipo_introvert:
+                    connection.execute(
+                        insert(usuario_tipo).values(
+                            id_usuario=user_dict['id_usuario'],
+                            id_tipointro=tipo_id
+                        )
+                    )
 
-            if intro_list:
-                user_dict['id_tipointro'] = ",".join(str(i['id_tipointro']) for i in intro_list)
-                user_dict['tipo_introvertido'] = ",".join(i['tipo'] for i in intro_list)
-                user_dict['video_introvertido'] = ",".join(i['video'] for i in intro_list)
-            else:
-                user_dict['id_tipointro'] = None
-                user_dict['tipo_introvertido'] = None
-                user_dict['video_introvertido'] = None
+                # Obtener tipos de introversión
+                query = (select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
+                         .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
+                         .where(usuario_tipo.c.id_usuario == user_dict['id_usuario']))
 
-            token = crear_token({"sub": str(user_dict['id_usuario'])})
+                intro_list = [dict(row._mapping) for row in connection.execute(query).fetchall()]
 
-            return {
-                "message": "Usuario registrado con Google exitosamente",
-                "token": token,
-                "tipo_token": "bearer",
-                "user_id": user_dict['id_usuario'],
-                "nombre_completo": user_dict['nombre_completo'],
-                "id_tipo_introvertido": user_dict['id_tipointro'],
-                "tipos_de_introvertido": user_dict['tipo_introvertido'],
-                "video": user_dict['video_introvertido']
-            }
+                if intro_list:
+                    user_dict['id_tipointro'] = ",".join(str(i['id_tipointro']) for i in intro_list)
+                    user_dict['tipo_introvertido'] = ",".join(i['tipo'] for i in intro_list)
+                    user_dict['video_introvertido'] = ",".join(i['video'] for i in intro_list)
+                else:
+                    user_dict['id_tipointro'] = None
+                    user_dict['tipo_introvertido'] = None
+                    user_dict['video_introvertido'] = None
+
+                token = crear_token({"sub": str(user_dict['id_usuario'])})
+
+                return {
+                    "message": "Registro con Google exitoso",
+                    "token": token,
+                    "tipo_token": "bearer",
+                    "user_id": user_dict['id_usuario'],
+                    "nombre_completo": user_dict['nombre_completo'],
+                    "id_tipo_introvertido": user_dict['id_tipointro'],
+                    "tipos_de_introvertido": user_dict['tipo_introvertido'],
+                    "video": user_dict['video_introvertido']
+                }
 
     except ValueError:
         raise HTTPException(status_code=401, detail="Token de Google inválido")
-    except Exception as e:
-        print(f"[ERROR registrar_google] {e}")
-        raise HTTPException(status_code=500, detail="Error interno del servidor")

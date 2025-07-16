@@ -8,20 +8,23 @@ from typing import List
 from jose import jwt
 from google.oauth2 import id_token
 from google.auth.transport import requests 
-
 import bcrypt
 
+#FUNCIONES ESPECIALES#
+#Función para hashear al contraseña
 def hashear_contraseña(password: str) -> str:
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
     return hashed.decode('utf-8')
 
+#Funcion para Comparar la contraseña de la base de datos con la que envia el usuario
 def verificar_contraseña(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
 SECRET_KEY = "brochazo"
 ALGORITHM = "HS256"
 
+#Funcion para crear un token unico al usuario
 def crear_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     expire = datetime.utcnow() + (expires_delta or timedelta(days=7))
@@ -31,6 +34,7 @@ def crear_token(data: dict, expires_delta: timedelta = None):
 
 router = APIRouter()
 
+#MODELOS PARA RECIBIR 
 
 class LoginRequest(BaseModel):
     user_or_email: constr(strip_whitespace=True, min_length=3)

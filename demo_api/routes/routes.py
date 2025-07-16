@@ -46,8 +46,12 @@ class RegisterRequest(BaseModel):
 class GoogleToken(BaseModel):
     id_token: str
 
+
 class GoogleRegister(BaseModel):
-    id_token: str
+    nombre_completo: str
+    correo: str
+    user: str
+    password: str
     tipo_introvert: List[int]
 
 
@@ -255,19 +259,13 @@ def registrar(request: RegisterRequest):
 @router.post("/api/login_google")
 def login_google(request: GoogleToken):
     try:
-        # Verificar token
-        idinfo = id_token.verify_oauth2_token(
-            request.id_token,
-            grequests.Request()
-        )
-
-        email = idinfo.get("email")
-        nombre = idinfo.get("name")
+        
+        user = request.id_token
 
         with engine.connect() as connection:
-            # Buscar usuario por correo
+            # Buscar usuario
             result = connection.execute(
-                select(usuarios).where(usuarios.c.correo == email)
+                select(usuarios).where(usuarios.c.username == user)
             ).fetchone()
 
             if not result:
@@ -309,39 +307,38 @@ def login_google(request: GoogleToken):
 
 
 # --- REGISTRO CON GOOGLE ---
+from fastapi import HTTPException
+
 @router.post("/api/registrar_google")
 def registrar_google(request: GoogleRegister):
     try:
-        idinfo = id_token.verify_oauth2_token(
-            request.id_token,
-            grequests.Request()
-        )
-
-        email = idinfo.get("email")
-        nombre = idinfo.get("name")
-
         with engine.connect() as connection:
             with connection.begin():
-
-                result = connection.execute(
-                    select(usuarios).where(usuarios.c.correo == email)
+                # Validar si el usuario o correo ya están registrados
+                existing = connection.execute(
+                    select(usuarios).where(
+                        (usuarios.c.username == request.user) | (usuarios.c.correo == request.correo)
+                    )
                 ).fetchone()
 
-                if result:
+                if existing:
                     raise HTTPException(status_code=409, detail="Usuario ya registrado")
+
+                # Hashear contraseña si viene (puede ser null)
+                password_hash = hashear_contraseña(request.password) if request.password else hashear_contraseña("google_default")
 
                 insert_query = (
                     insert(usuarios)
                     .values(
-                        nombre_completo=nombre,
-                        correo=email,
-                        username=email.split('@')[0],  # Puedes personalizar esto
-                        contraseña=hashear_contraseña("google_default")  # Puedes dejar esto como dummy
+                        nombre_completo=request.nombre_completo,
+                        correo=request.correo,
+                        username=request.user,
+                        contraseña=password_hash
                     )
                     .returning(usuarios)
                 )
-                user = connection.execute(insert_query).fetchone()
-                user_dict = dict(user._mapping)
+                new_user = connection.execute(insert_query).fetchone()
+                user_dict = dict(new_user._mapping)
 
                 for tipo_id in request.tipo_introvert:
                     connection.execute(
@@ -351,10 +348,11 @@ def registrar_google(request: GoogleRegister):
                         )
                     )
 
-                # Obtener tipos de introversión
-                query = (select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
-                         .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
-                         .where(usuario_tipo.c.id_usuario == user_dict['id_usuario']))
+                query = (
+                    select(usuario_tipo.c.id_tipointro, tipos_introvertido.c.tipo, tipos_introvertido.c.video)
+                    .join(tipos_introvertido, usuario_tipo.c.id_tipointro == tipos_introvertido.c.id_tipointro)
+                    .where(usuario_tipo.c.id_usuario == user_dict['id_usuario'])
+                )
 
                 intro_list = [dict(row._mapping) for row in connection.execute(query).fetchall()]
 
@@ -380,5 +378,9 @@ def registrar_google(request: GoogleRegister):
                     "video": user_dict['video_introvertido']
                 }
 
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Token de Google inválido")
+    except HTTPException as he:
+        # Relanzar para que FastAPI devuelva el status code correcto
+        raise he
+    except Exception as e:
+        print("ERROR:", e)
+        raise HTTPException(status_code=500, detail="Error interno en el servidor")
